@@ -1,0 +1,665 @@
+---
+title: "U.S. Domestic Flight Delay Analysis"
+output: 
+  html_notebook:
+    df_print: paged
+    code_folding: hide
+---
+# Project Overview
+
+### Goal: 
+
+We are analyzing 2019 US domestic flights data to help people better understand the factors that are associated with flight delays.
+
+### Main Procedures:
+
+1.	Data extraction, merge and features selection
+2.  Data cleaning and transformation 
+3.	Delay visualizations
+4.	Conclusion
+
+# Data Extraction and Cleaning:
+
+We collected data from https://www.transtats.bts.gov/DL_SelectFields.asp?Table_ID=236, which is under the maintenance of Bureau of Transportation Statistics. The dataset we employed contained more than 7.6 million domestic flights in 2019. Meanwhile, we also wrangled and transformed new features to present the data plot more properly.  
+
+### Some Key Variables:
+
+* Month: month of the flights
+* Time: flight time of the day, morning, afternoon and night.
+* City: flights departure city’s name
+* State_Name: flights departure state’s name
+* IATA_Code: Code assigned by IATA and commonly used to identify a carrier. 
+* NAS: National Air System Delay, in Minutes
+* DEP_DELAY & ARR_DELAY: Departure delay and arrival delay, in minutes
+* Delay:  whether flights are on time, short time delay, or long time delay
+* AIRLINE: names of different airline
+* AIR_TIME: Flight length
+* Description: Full name of the airport.
+
+```{r message = FALSE}
+library(readr)
+library(dplyr)
+library(forcats)
+library(ggplot2)
+library(ggthemes)
+library(ggpubr)
+library(ggrepel)
+library(plotly)
+library(plotrix)
+library(RColorBrewer)
+library(ggmap)
+library(leaflet)
+library(leafsync)
+library(leaflet.extras)
+library(leafletCN)
+library(treemap)
+```
+
+```{r}
+setwd("C:/Users/Yuhua_Ding/OneDrive/Documents/QMSS Spring 2020/GR5063 Data Visualization/Final_project")
+```
+
+```{r eval=FALSE, message=FALSE, include=FALSE}
+Jan <- read_csv("Jan.csv")
+Feb <- read_csv("Feb.csv")
+Mar <- read_csv("Mar.csv")
+Apr <- read_csv("Apr.csv")
+May <- read_csv("May.csv")
+Jun <- read_csv("Jun.csv")
+Jul <- read_csv("Jul.csv")
+Aug <- read_csv("Aug.csv")
+Sep <- read_csv("Sep.csv")
+Oct <- read_csv("Oct.csv")
+Nov <- read_csv("Nov.csv")
+Dec <- read_csv("Dec.csv")
+```
+
+```{r eval=FALSE, include=FALSE}
+all_2019 <- rbind(Jan, Feb, Mar, Apr, May, Jun, Jul, Aug, Sep, Oct, Nov, Dec)
+saveRDS(all_2019, "all_2019.Rds")
+```
+
+
+```{r}
+all_2019 <- read_rds("all_2019.Rds")
+```
+
+
+```{r}
+df <- all_2019
+city <- strsplit(df$ORIGIN_CITY_NAME, ",")
+mat <- matrix(unlist(city), ncol=2, byrow=TRUE)
+city <- as.data.frame(mat)
+df$ORIGIN_CITY_NAME  <- city$V1
+
+names(df)[12] <- "city"
+names(df)[13] <- 'state_name'
+names(df)[8] <- "IATA_CODE"
+df$city <- as.character(df$city)
+df$state_name <- as.character(df$state_name)
+df$IATA_CODE <- as.character(df$IATA_CODE)
+```
+
+```{r message = FALSE}
+lon_lat <- read_csv("data/uscities.csv")
+lon_lat <- lon_lat %>%
+  dplyr::select(city,state_name,lat,lng,population)
+
+airlines <- read.csv("data/airlines.csv")
+airlines$IATA_CODE <- as.character(airlines$IATA_CODE)
+lon_lat$city <- as.character(lon_lat$city)
+lon_lat$state_name <- as.character(lon_lat$state_name)
+
+df1 <- left_join(df, lon_lat, by = c('city'='city', 'state_name'='state_name'))
+df2 <- left_join(df1, airlines)
+
+airport <- read.csv("data/L_AIRPORT_ID.csv")
+names(airport)[1] = "ORIGIN_AIRPORT_ID"
+df2 <- left_join(df2, airport)
+```
+
+```{r}
+all_2019 <- all_2019 %>% mutate(TOT_DELAY = DEP_DELAY + ARR_DELAY)
+
+all_2019$al_name <- all_2019$OP_CARRIER
+
+all_2019$al_name <- recode(all_2019$al_name, "AS" = "Alaska Airlines", "G4" = "Allegiant Air",
+                           "AA" = "American Airlines", "DL" = "Delta Air Lines", "F9" = "Frontier Airlines",
+                           "HA" = "Hawaiian Airlines", "B6" = "JetBlue Airways", "WN" = "Southwest Airlines", 
+                           "NK" = "Spirit Airlines", "UA" = "United Airlines", 
+                           .default = "Other", .missing = "Other")
+
+all_2019$lc_airlines <- fct_collapse(all_2019$OP_CARRIER, "Budget Airlines" = c("NK", "F9", "WN", "B6", "G4"), 
+                                     "Other Major Airlines" = c("AS", "AA", "DL", "HA", "UA"))
+all_2019$lc_airlines <- as.vector(all_2019$lc_airlines)
+
+all_2019$lc_airlines <- recode(all_2019$lc_airlines, "Budget Airlines" = "Budget Airlines", 
+                               "Other Major Airlines" = "Other Major Airlines", .default = "Other smaller airlines",
+                               .missing = "Other smaller airlines")
+
+
+```
+
+```{r}
+summary_by_al <- all_2019 %>% group_by(lc_airlines, al_name) %>% 
+                              summarise(ARR_DELAY = round(mean(ARR_DELAY, na.rm = TRUE), 1), 
+                                                               DEP_DELAY = round(mean(DEP_DELAY, na.rm = TRUE), 1),
+                                                               TOT_DELAY = ARR_DELAY + DEP_DELAY)
+```
+
+# Visualizations {.tabset .tabset-fade .tabset-pills}
+
+## 1. Overview of U.S. Domestic Flight Delays {.tabset .tabset-fade .tabset-pills}
+
+### a) Delay and air traffic volume by U.S. states and cities
+
+We first process the data and get all the airports flights delay information (departure delay and arrival delay) from each of the US cities. From the state of Alabama to Wyoming. 
+```{r}
+library(DT)
+
+summary_2019 <- all_2019 %>% group_by(State = ORIGIN_STATE_NM, City = ORIGIN_CITY_NAME) %>% 
+                             dplyr::summarise("Departure Delay" = round(mean(DEP_DELAY, 
+                                                                             na.rm = TRUE), 1),                                                     "Arrival Delay" = round(mean(ARR_DELAY,                                                                                             na.rm = TRUE), 1),
+                                              "Flight Volumne (in Thousands)" = round(n() / 1000), 1)
+
+summary_2019 %>% datatable(rownames = FALSE, filter = list(position = "top"), 
+                            options = list(language = list(sSearch = "Filter:"))) %>%
+  formatStyle(columns = 1:5, color = 'black')
+```
+
+### b) U.S. Delay Map by States
+
+We use choropleth maps to see how the delays are distributed. As it shows from the graph, northern states like North Dakota and South Dakota have longer delays. Some New England states also have longer delays. We were thinking that the reason could be cold weather.
+
+```{r message = FALSE, warning = FALSE}
+library(rgdal)
+library(raster)
+#US_SHP <- readOGR(dsn = "C:/Users/Yuhua_Ding/OneDrive/Documents/QMSS Spring 2020/GR5063 Data Visualization/Final_project", layer = "cb_2018_us_state_500k")
+
+
+US_SHP <- shapefile("C:/Users/Yuhua_Ding/OneDrive/Documents/QMSS Spring 2020/GR5063 Data Visualization/Final_project/shpfile/cb_2018_us_state_500k.shp")
+US_sp <- spTransform(US_SHP, CRS("+init=epsg:4326"))
+```
+
+```{r}
+By_state <- all_2019 %>% group_by(ORIGIN_STATE_NM) %>% 
+                         summarise(TOT_DELAY = round(mean(TOT_DELAY, na.rm = TRUE), 0),
+                                                                 FL_COUNT = n())
+
+US_sp@data <- US_sp@data %>% left_join(By_state, by = c("NAME" = "ORIGIN_STATE_NM"))
+```
+
+
+```{r}
+Label_Content <- paste("State Name:", US_sp@data$NAME, "<br/>",
+                           "Average Delay Time (Minutes):", US_sp@data$TOT_DELAY, "<br/>",
+                           "Flight Count (Thousands):", round(US_sp@data$FL_COUNT / 1000, 2))
+
+bins <- c(-Inf, 10, 15, 20, 25, Inf)
+pal3 <- colorBin("YlOrRd", domain = US_sp@data$TOT_DELAY, bins = bins, na.color = "transparent")
+
+m4 <- leaflet(data = US_sp, options = leafletOptions(minZoom = 4, maxZoom = 7)) %>% 
+                          setView(lng = -96.20, lat = 39.50, zoom = 4) %>% 
+                          addProviderTiles(providers$CartoDB.Positron) %>%
+                          addPolygons(stroke = TRUE, smoothFactor = 0.5,
+                                       weight=1, color='#333333', opacity=1, 
+                                       fillColor = ~pal3(TOT_DELAY), 
+                                       fillOpacity = 1, 
+                                       label = ~stringr::str_c(NAME, " ",
+                                       "Average Delay: ",                         
+                                       formatC(TOT_DELAY, big.mark = ',', format='d')),
+                                       labelOptions = labelOptions(direction = 'auto'),
+                                       highlightOptions = highlightOptions(
+                                       color='#9a8ee8', weight = 3,
+                                       bringToFront = TRUE, sendToBack = TRUE),
+                                       popup = Label_Content) %>%
+                          addLegend(pal = pal3, values = ~TOT_DELAY, 
+                                    opacity = 0.75, position = "bottomleft",
+                                    title = "Average Delay Time And Air Traffic Volume By State")
+
+m4
+```
+
+### c) Treemap of delayed flight count, by U.S. states
+
+Treemap was used to distinguish US states’ flights delay situation. The larger area each state occupies, the more delayed flights that state has.
+```{r}
+delayed_count <- all_2019 %>% filter(TOT_DELAY > 0) %>%
+                              group_by(state = ORIGIN_STATE_NM) %>% dplyr::summarise(count = n())
+
+```
+
+```{r}
+tree1 <- treemap(delayed_count, index = "state", vSize = "count", type = "index", 
+        palette = "Purples", title = "Count of Delayed Flights By State")
+```
+
+
+## 2. Delay By Airlines {.tabset .tabset-fade .tabset-pills}
+### a) Airline Market Share
+
+A simple illustration of market share breakdown for commercial airlines. We made a bar chart to show each major airlines’ market share (in percentage). Budget airlines like Southwest Airlines occupy around 20% of the aviation market share while small regional airlines like Hawaiian Airlines only occupy less than 5% market share in total.
+```{r warning = FALSE, message = FALSE}
+percent <-df2%>%
+  dplyr::select(AIRLINE)%>%
+  filter(!is.na(AIRLINE)) %>%
+  count(AIRLINE)%>%
+  mutate(countT = sum(n))%>%
+  mutate(per=round(n/countT,2))%>%
+  arrange(desc(per))
+
+market_share <- ggplot(data = percent, aes(x = reorder(AIRLINE,per), y=per,fill=AIRLINE))+geom_col()+xlab('Airline') + ylab('Percentage')+ 
+  labs(title="Airlines Market Share", caption = "Data source: Bureau of Transportation")+ theme_economist() + scale_colour_economist()+ coord_flip()+ theme(legend.position = "none")+ theme(axis.title.x = element_text(vjust= -2), axis.title.y = element_text(vjust= 3), plot.caption = element_text(vjust= -5,hjust=1,face="italic",size = 8) )
+  
+market_share
+```
+
+### b) Airline Mean Delay Time
+
+Before we draw the Airline’s main delay time chart, we summarised the average total delay (arrival delay plus departure delay) of the major airlines. Among the 12 airlines, Jetblue and Atlantic Southeast airlines have the longest mean delay time (over 20 mins) while Hawaiian Airlines has the mean delay time of 6 minutes. A barplot was used to visualize the result. 
+```{r warning = FALSE, message = FALSE}
+sum <- df2%>%
+  dplyr::select(AIRLINE,ARR_DELAY_NEW)%>%
+  filter(!is.na(ARR_DELAY_NEW), !is.na(AIRLINE))%>%
+  group_by(AIRLINE)%>%
+  summarise(mean=round(mean(ARR_DELAY_NEW)), max = round(max(ARR_DELAY_NEW)), min= round(min(ARR_DELAY_NEW)))%>%
+  arrange(desc(mean))
+```
+
+```{r}
+mean_delay <- ggplot(data = sum, aes(x = reorder(AIRLINE,mean), y=mean,fill=AIRLINE))+geom_col()+xlab('Airline') + ylab('Delay Length')+ labs(title="Airlines Mean Delay Time", caption = "Data source: Bureau of Transportation")+ theme_economist() + scale_colour_economist()+ coord_flip()+ theme(legend.position = "none")+ theme(axis.title.x = element_text(vjust= -2),                                                                axis.title.y = element_text(vjust= 3),
+                                          plot.caption = element_text(vjust= -5,hjust=1,face="italic",size = 8) )
+
+mean_delay
+```
+
+
+### c) Departure and arrival delay for low-cost airlines versus others.  
+
+We wanted to use one chart to show each airline’s departure and arrival delays. From the plot, we can tell that Hawaiian airlines has the shortest departure delay and arrival delay. Jetblue Airways has the longest departure and arrival delays (all in minutes). After we finished drawing the plot, we also would like to see if budget airlines and other major airlines have different departure and delay time. By making the calculation, we found out that budget airlines have the mean departure delay of 13.1 mins and departure delay of 7.6 mins. At the same time, other major airlines have the mean departure delay of 8.2 mins and arrival delays of 4.0 mins. The pyramid chart also shows us that budget airlines usually have worse delays than others (JetBlue’s delay is notoriously longer, as illustrated)
+```{r}
+summary_by_al_volume <- all_2019 %>% filter(al_name != "Other") %>% 
+                                     group_by(lc_airlines, al_name) %>% 
+                                     summarise(TOT_DELAY = round(mean(ARR_DELAY + DEP_DELAY, 
+                                                                      na.rm = TRUE), 1),
+                                                                      Volume = n())
+```
+
+```{r}
+summary_by_al <- summary_by_al %>% filter(lc_airlines != "Other smaller airlines")
+
+p2 <- ggplot(data = summary_by_al, aes(x = reorder(al_name, TOT_DELAY), 
+                                       y = DEP_DELAY, fill = lc_airlines)) + 
+      geom_bar(stat = "identity") + 
+      geom_text(label = summary_by_al$DEP_DELAY, size = 3, hjust = 0.4) +
+      coord_flip() + 
+      theme_economist() +
+      labs(x = "", y = "Departure delay (minutes)") +
+      scale_fill_discrete(name = "") + scale_y_reverse()
+
+
+p3 <- ggplot(data = summary_by_al, aes(x = reorder(al_name, TOT_DELAY), 
+                                       y = ARR_DELAY, fill = lc_airlines)) + 
+      geom_bar(stat = "identity") + 
+      geom_text(label = summary_by_al$ARR_DELAY, size = 3) +
+      coord_flip() + 
+      theme_economist() +
+      labs(x = "", y = "Arrival delay (minutes)") +
+      scale_fill_discrete(name = "")
+
+p4 <- ggarrange(p2, p3, ncol = 2, common.legend = TRUE)
+
+p4
+```
+### d) Do larger airlines have longer delays?
+
+Overall, budget airlines have longer delays, but the delay time decreases as the company size increases. For other large traditional airlines, larger size resulted in longer delays (maybe due to operational deficiency)
+```{r message = FALSE, warning = FALSE}
+p5 <- ggplot(data = summary_by_al_volume, aes(x = log(Volume), y = TOT_DELAY)) + 
+      geom_point(aes(color = lc_airlines, size = log(Volume))) + 
+      geom_text_repel(label = summary_by_al_volume$al_name) + 
+      geom_smooth(aes(color = lc_airlines), method = "lm", se = FALSE, alpha = 0.1) + 
+      theme_economist() + 
+      labs(y = "Total delay (minutes)", x = "Number of flights in 2019, in natural log form", 
+        title = "Do larger airlines have longer delays?") + 
+      scale_color_discrete(name = "") +
+      scale_size(guide = 'none')
+
+p5
+```
+
+## 3. Delay By Time {.tabset .tabset-fade .tabset-pills}
+### a) Delay map by quarters of 2019
+
+The flight map is designed to show us which area has the longest average delay time in the USA. If the color around the area is light pink, then the average delay time will be 0-15 mins. However, if the color is dark red, then the delay time is above 45 mins. The size of the circle represents the air traffic volume in that area. The map shows that delay is not necessarily related to the large traffic volume. In the first quarter, the cities in the north like Michigan overall had much worse delays. However, the situation changed in the second quarter. In the second quarter, the cities in the south like Miami overall had much worse delays. It makes sense because summer is the season for extreme weathers like thunderstorms. 
+```{r eval=FALSE, include=FALSE}
+cities <- all_2019 %>% distinct(ORIGIN_CITY_NAME)
+
+cities$lon <- NA
+cities$lat <- NA
+
+for(i in 1:nrow(cities)) {
+  coord <- geocode(cities$ORIGIN_CITY_NAME[i])
+  cities$lon[i] <- coord$lon
+  cities$lat[i] <- coord$lat
+}
+
+saveRDS(cities, "cities.Rds")
+```
+
+```{r}
+cities <- readRDS("cities.Rds")
+cities <- cities %>% rename(City_name = "ORIGIN_CITY_NAME")
+```
+
+```{r message = FALSE, warning = FALSE}
+city_delays <- all_2019 %>% group_by(QUARTER, ORIGIN_CITY_NAME) %>% 
+                            summarise(TOT_DELAY = round(mean(TOT_DELAY, na.rm = TRUE), 0),
+                                      FL_COUNT = n()) %>% 
+                            rename(City_name = ORIGIN_CITY_NAME)
+city_delays <- right_join(city_delays, cities, by = "City_name")
+
+
+FY <- city_delays %>% group_by(City_name, lon, lat) %>% summarise(TOT_DELAY = mean(TOT_DELAY),
+                                                                  FL_COUNT = sum(FL_COUNT))
+Q1 <- city_delays %>% filter(QUARTER == 1)
+Q2 <- city_delays %>% filter(QUARTER == 2)
+Q3 <- city_delays %>% filter(QUARTER == 3)
+Q4 <- city_delays %>% filter(QUARTER == 4)
+
+
+FY_Content <- paste("City Name:", FY$City_name, "<br/>",
+                           "Average Delay Time (Minutes):", FY$TOT_DELAY, "<br/>",
+                           "Total Flight Count (in Thousands):", round(FY$FL_COUNT / 1000, 2))
+Q1_Content <- paste("City Name:", Q1$City_name, "<br/>",
+                           "Average Delay Time (Minutes):", Q1$TOT_DELAY, "<br/>",
+                           "Total Flight Count (in Thousands):", round(Q1$FL_COUNT / 1000, 2))
+Q2_Content <- paste("City Name:", Q2$City_name, "<br/>",
+                           "Average Delay Time (Minutes):", Q2$TOT_DELAY, "<br/>",
+                           "Total Flight Count (in Thousands):", round(Q2$FL_COUNT / 1000, 2))
+Q3_Content <- paste("City Name:", Q3$City_name, "<br/>",
+                           "Average Delay Time (Minutes):", Q3$TOT_DELAY, "<br/>",
+                           "Total Flight Count (in Thousands):", round(Q3$FL_COUNT / 1000, 2))
+Q4_Content <- paste("City Name:", Q4$City_name, "<br/>",
+                           "Average Delay Time (Minutes):", Q4$TOT_DELAY, "<br/>",
+                           "Total Flight Count (in Thousands):", round(Q4$FL_COUNT / 1000, 2))
+
+
+bins <- c(-Inf, 15, 30, 45, Inf)
+pal1 <- colorBin("Reds", domain = city_delays$TOT_DELAY, bins = bins, na.color = "transparent")
+
+m1 <- leaflet(city_delays, options = leafletOptions(minZoom = 4, maxZoom = 7)) %>% 
+        setView(lng = -96.20, lat = 39.50, zoom = 4) %>%
+        addProviderTiles(providers$CartoDB.Positron) %>%
+        addCircles(data = FY, lng = ~lon, lat = ~lat, radius = ~ FL_COUNT / 4, 
+                   color = ~pal1(TOT_DELAY), opacity = 0.8, popup = FY_Content, group = "FY") %>%
+        addCircles(data = Q1, lng = ~lon, lat = ~lat, radius = ~ FL_COUNT, 
+                   color = ~pal1(TOT_DELAY), opacity = 0.8, popup = Q1_Content, group = "Q1") %>%
+        addCircles(data = Q2, lng = ~lon, lat = ~lat, radius = ~ FL_COUNT, 
+                   color = ~pal1(TOT_DELAY), opacity = 0.8, popup = Q2_Content, group = "Q2") %>%
+        addCircles(data = Q3, lng = ~lon, lat = ~lat, radius = ~ FL_COUNT, 
+                   color = ~pal1(TOT_DELAY), opacity = 0.8, popup = Q3_Content, group = "Q3") %>%
+        addCircles(data = Q4, lng = ~lon, lat = ~lat, radius = ~ FL_COUNT, 
+                   color = ~pal1(TOT_DELAY), opacity = 0.8, popup = Q4_Content, group = "Q4") %>%
+        addLegend(pal = pal1, values = ~TOT_DELAY, position = "bottomleft", 
+                  title = "Average Total Delay (in minutes)", 
+                  opacity = 0.75) %>%
+        addLayersControl(baseGroups = c("FY", "Q1", "Q2", "Q3", "Q4"), 
+                         options = layersControlOptions(collapsed = TRUE))
+
+m1
+```
+
+
+```{r}
+worst_delays <- all_2019 %>% filter(TOT_DELAY >= 360) %>% 
+                             select(MONTH, DAY_OF_WEEK, OP_CARRIER, TOT_DELAY, 
+                                    City_name = ORIGIN_CITY_NAME)
+
+worst_delays <- right_join(worst_delays, cities, by = "City_name")
+
+worst_delays$DAY_OF_WEEK <- recode(worst_delays$DAY_OF_WEEK, "1" = "Monday", "2" = "Tuesday", 
+                                   "3" = "Wednesday", "4" = "Thursday", "5" = "Friday", 
+                                   "6" = "Saturday", "7" = "Sunday")
+```
+
+```{r}
+red_eye_flights <- all_2019 %>% filter(CRS_DEP_TIME >= 2100 & CRS_ARR_TIME <= 0600)
+normal_flights <- all_2019 %>% filter(DEP_TIME < 2100 | ARR_TIME > 0600)
+
+red_eye_flights_summ <- red_eye_flights %>% group_by(City_name = ORIGIN_CITY_NAME) %>% 
+                                            summarise(TOT_DELAY = round(mean(TOT_DELAY, 
+                                                                        na.rm = TRUE), 0)) %>%
+                                            right_join(cities, by = "City_name")
+
+normal_flights_summ <- normal_flights %>% group_by(City_name = ORIGIN_CITY_NAME) %>% 
+                                            summarise(TOT_DELAY = round(mean(TOT_DELAY, 
+                                                                        na.rm = TRUE), 0))%>%
+                                            right_join(cities, by = "City_name")
+```
+
+```{r}
+## function borrowed from package leafletCN
+##' @title Add title to the leaflet
+##'
+##' @description Function for creating a h1 title to the leaflet
+
+addTitle = function(object,
+                    text,
+                    color = "black",
+                    fontSize = "20px",
+                    fontFamily = "Sans",
+                    leftPosition = 50,
+                    topPosition = 2){
+
+  htmlwidgets::onRender(object, paste0("
+                                       function(el,x){
+                                       h1 = document.createElement('h1');
+                                       h1.innerHTML = '", text ,"';
+                                       h1.id='titleh1';
+                                       h1.style.color = '", color ,"';
+                                       h1.style.fontSize = '",fontSize,"';
+                                       h1.style.fontFamily='",fontFamily,"';
+                                       h1.style.position = 'fixed';
+                                       h1.style['-webkit-transform']='translateX(-50%)';
+                                       h1.style.left='",leftPosition ,"%';
+                                       h1.style.top='",topPosition,"%';
+                                       document.body.appendChild(h1);
+                                       }"))
+}
+```
+
+### b) Are the worst delays usually associated with Red Eye Flights?
+
+Red Eye flights are defined as flights that departs after 9 p.m. and arrives before 6 a.m. In the following two maps, the “worst delays” are defined as delays that are over 6 hours, which is usually the delay time to trigger delay protection. The comparison below provides a fine illustration of the worst delays’ frequency between Red Eye flights and normal flights (the upper map represents Red Eye flights whereas the lower represents regulars). From the visualization we can easily tell Red Eye flights are commonly associated with delays that are over 6 hours (good lucks if you are traveling on those flights)
+
+```{r warning = FALSE, message = FALSE}
+REF_CONTENT <- paste("City Name:", red_eye_flights_summ$City_name, "<br/>",
+                           "Average Delay Time (Minutes):", red_eye_flights_summ$TOT_DELAY)
+NF_CONTENT <- paste("City Name:", normal_flights_summ$City_name, "<br/>",
+                           "Average Delay Time (Minutes):", normal_flights_summ$TOT_DELAY)
+
+
+bins <- c(-Inf, 15, 30, 45, Inf)
+pal2 <- colorBin("Reds", domain = red_eye_flights_summ$TOT_DELAY, bins = bins, na.color = "transparent")
+
+m2 <- leaflet(red_eye_flights_summ, options = leafletOptions(minZoom = 4, maxZoom = 7)) %>% 
+        setView(lng = -96.20, lat = 39.50, zoom = 4) %>%
+        addProviderTiles(providers$CartoDB.DarkMatter) %>%
+        addCircles(lng = ~lon, lat = ~lat, radius = ~ TOT_DELAY * 300, 
+                   color = "#ad1111", opacity = 0.8, popup = REF_CONTENT) %>%
+        leafem
+
+
+m3 <- leaflet(normal_flights_summ, options = leafletOptions(minZoom = 4, maxZoom = 7)) %>% 
+        setView(lng = -96.20, lat = 39.50, zoom = 4) %>%
+        addProviderTiles(providers$CartoDB.Positron) %>%
+        addCircles(lng = ~lon, lat = ~lat, radius = ~ TOT_DELAY * 300, 
+                   color = "#fa9da4", opacity = 0.8, popup = NF_CONTENT)
+
+latticeview(m2, m3, ncol = 1, sync.cursor = TRUE, no.initial.sync = FALSE)
+```
+
+### c) Worst delays by days of week
+
+It is interesting to see that from Monday to Thursday, almost all of the worst delays are concentrated in New York and Chicago metropolitan areas. And when Friday and weekend days come, the worst delays start to spread to other popular getaway destinations (LA, Florida, New Orleans, e.g.)  It might be because of the air traffic volume of the airports. From Monday to Thursday, people are more likely to travel for business. Thus, large cities for business like New York and Chicago have more air traffic volume. However,  from Friday to Sunday, people are more likely to travel for vacation. Thus, the air traffic and delays spread to the south.
+```{r}
+worst_delays <- all_2019 %>% filter(TOT_DELAY >= 360) %>% 
+                             dplyr::select(MONTH, DAY_OF_WEEK, OP_CARRIER, TOT_DELAY, 
+                                    City_name = ORIGIN_CITY_NAME) 
+
+worst_delays <- right_join(worst_delays, cities, by = "City_name")
+
+worst_delays$DAY_OF_WEEK <- factor(worst_delays$DAY_OF_WEEK, levels = 1:7, 
+                                   labels = c("Monday", "Tuesday", "Wednesday",
+                                              "Thursday", "Friday", "Saturday",
+                                              "Sunday"))
+
+worst_delays <- worst_delays %>% filter(!is.na(DAY_OF_WEEK))
+```
+
+
+```{r warning = FALSE, message = FALSE}
+map_USA <- get_map(location = c(lon = -96.20, lat = 39.50), zoom = 4, source="stamen", maptype="toner-lite")
+
+m5 <- ggmap(map_USA) + stat_density2d(data = worst_delays, aes(x = lon, y = lat, fill = ..level..),
+                                bins = 4, alpha = 0.5, geom = "polygon", size = 0.05
+                                ) + 
+                 theme(axis.title = element_blank(), 
+                       axis.text = element_blank(),
+                       axis.ticks = element_blank(),
+                       legend.position = "none") + 
+                 facet_wrap(~DAY_OF_WEEK, ncol = 4)
+m5
+```
+
+### d) Delay by month
+
+We separated delays into three categories by delay status: long delay, short delay, and no delay, and we drew the bar chart to see how each category changed for each month.  We  found that in each year’s June, airplanes have the most long delay (marked in pink color) and short delay cases, on average. And  in September, the delay cases are the fewest.
+```{r}
+df2$delay <- "On_Time"
+df2[which(df2$DEP_DELAY_NEW ==0), ]$delay = "On_Time"
+df2[which(df2$DEP_DELAY_NEW >0 & df2$DEP_DELAY_NEW <30 ), ]$delay = "Short_Delay"
+df2[which(df2$DEP_DELAY_NEW >30 ), ]$delay = "Long_Delay"
+
+df2$MONTH <- as.factor(df2$MONTH)
+a<- df2%>%
+  dplyr::select(MONTH,delay)%>%
+  group_by(MONTH)
+
+
+b <-df2%>%
+  dplyr::select(MONTH,delay)%>%
+  filter(delay == "Long_Delay")%>%
+  group_by(MONTH)%>%
+  count(delay)%>%
+  summarise(countT = sum(n))
+
+p6 <- ggplot()+ geom_bar(data = a, aes(x = MONTH, fill = delay), position = 'dodge') + geom_line(data = b, aes(x = MONTH, y=countT, group = 1))+ xlab('Month') + ylab('Number of Flights')+ labs(title="Month and Flights number", caption = "Data source: Bureau of Transportation")+ theme_economist() + scale_colour_economist()+ theme(axis.title.x = element_text(vjust= -2), axis.title.y = element_text(vjust= 3), plot.caption = element_text(vjust= -5,hjust=1,face="italic",size = 8) )
+
+p6
+```
+ 
+### e) Delay length by time of the day
+
+During the time of a day, morning has the smallest number of delays and the biggest number of on time flights. During the afternoon and night, the delay cases increase. The proportional bar plot also helps us to visually see the distributions.
+```{r message = FALSE, warning = FALSE}
+df2$DEP_TIME <- as.numeric(df2$DEP_TIME)
+range(df2$DEP_TIME)
+df2$time <- "Morning"
+df2[which(df2$DEP_TIME >600 & df2$DEP_TIME <1200), ]$time = "Morning"
+df2[which(df2$DEP_TIME >= 1200 & df2$DEP_TIME <1800 ), ]$time = "Afternoon"
+df2[which(df2$DEP_TIME >= 1800 & df2$DEP_TIME <= 24000 ), ]$time = "Night"
+
+ggplot()+ geom_bar(data = df2, aes(x = time, fill = delay),position = 'dodge') + xlab('Time of the day') + ylab('Number of Flights')+ labs(title="Delay Type and Time of the Day", caption = "Data source: Bureau of Transportation")+ theme_economist() + scale_colour_economist()+ theme(axis.title.x = element_text(vjust= -2), axis.title.y = element_text(vjust= 3), plot.caption = element_text(vjust= -5,hjust=1,face="italic",size = 8))
+```
+```{r}
+c<- df2%>%
+  dplyr::select(time,delay)%>%
+  group_by(time)%>%
+  count(delay)
+ggplot()+ geom_bar(data = c, aes(x = time, fill = delay, y=n), 
+                   position = 'fill', stat = 'identity') + 
+          xlab('Time of the day') + ylab('Number of Flights') + 
+          labs(title="Delay Type and Time of the Day", 
+               caption = "Data source: Bureau of Transportation") + 
+          theme_economist() +     scale_colour_economist()+ 
+          theme(axis.title.x = element_text(vjust= -2), 
+                axis.title.y = element_text(vjust= 3), 
+                plot.caption = element_text(vjust= -5,hjust=1,face="italic",size = 8))
+
+```
+
+## 4. Miscellaenous (other interesting findings) {.tabset .tabset-fade .tabset-pills}
+### a) Delay length type by airline
+
+We want to make comparisons between airlines’ delays. Among the 12 airlines, Southwest has the most delayed flights (both long and short delays, due to its large number of flights).
+```{r warning = FALSE, message = FALSE}
+c<- df2%>%
+  dplyr::select(AIRLINE,delay)%>%
+  filter(!is.na(AIRLINE)) %>%
+  group_by(AIRLINE)
+
+ggplot()+ geom_bar(data = c, aes(x = AIRLINE, fill = delay), position = 'dodge') + xlab('Airlines') + ylab('Number of Flights')+ labs(title="Airlines and Type of Delay", caption = "Data source: Bureau of Transportation")+ theme_economist() + scale_colour_economist()+ theme(axis.title.x = element_text(vjust= -2), axis.title.y = element_text(vjust= 3), plot.caption = element_text(vjust= -5,hjust=1,face="italic",size = 8)) + coord_flip()
+```
+
+### b) Offical Delay Reasons
+
+We found out 5 major reasons that cause the flight delay. Among the 5 reasons, Security reasons barely cause delays. But bad weather like storms may cause delays, but with big storms. However, NAS reasons, airline companies’ specific reasons and flight late arrival are the most common reasons. 
+```{r}
+reason <- df2%>%
+  dplyr::select(CARRIER_DELAY,WEATHER_DELAY,NAS_DELAY,SECURITY_DELAY,LATE_AIRCRAFT_DELAY)%>%
+  na.omit()%>%
+  transmute(carrier = mean(CARRIER_DELAY),weather = mean(WEATHER_DELAY), nas = mean(NAS_DELAY), 
+         security = mean(SECURITY_DELAY),late= mean(LATE_AIRCRAFT_DELAY))%>%
+  unique()%>%
+  tidyr::gather(key = "reason", value = "mean_length")
+
+ggplot(data = reason, aes(x = reorder(reason,mean_length), y = mean_length, fill = reason))+ geom_col() + xlab('Reason') + ylab('Mean Length')+ labs(title="Delay Reasons and Length", caption = "Data source: Bureau of Transportation")+ theme_economist() + scale_colour_economist()+  theme(legend.position = "none")+ theme(axis.title.x = element_text(vjust= -2),                                                                axis.title.y = element_text(vjust= 3),
+                                          plot.caption = element_text(vjust= -5,hjust=1,face="italic",size = 8) )
+```
+
+### c) Delay by flight length
+
+The plot shows us that with the increase of flight time, the delay also decreases. The result suggests that when you take longer flights (from NYC to Hawaii, for instance), the flight barely delays. But if you choose to fly from Orlando to Charlotte, the flight might have a worse delay.
+```{r}
+df3 <- df2[sample(nrow(df2), 10000), ]# sample 10000 rows
+
+ggplot(data = df3, aes(x = AIR_TIME, y = DEP_DELAY_NEW),position = 'dodge')+ 
+  geom_point(color = "orange") + xlab('Flight Time') + 
+  ylab('Delay Time')+ labs(title="Flight time and Delay Time", 
+                           caption = "Data source: Bureau of Transportation")+ 
+  theme_economist() + scale_colour_economist()+ 
+  theme(axis.title.x = element_text(vjust= -2), 
+        axis.title.y = element_text(vjust= 3), 
+        plot.caption = element_text(vjust= -5, hjust=1, face="italic", size = 8))
+```
+
+### d) Airports with worst delays (avoid if possible)
+
+The chart shows 10 airports that have the longest overall delay time among the whole country. The one with the longest delay time (Mammoth lakes airport) has 40 minutes delay time. The 10th rank airport (Aspen) has an averaged delay time of 30 minutes.
+```{r}
+airp <- df2%>%
+  dplyr::select(Description,ARR_DELAY_NEW)%>%
+  filter(!is.na(ARR_DELAY_NEW))%>%
+  group_by(Description)%>%
+  summarise(mean=round(mean(ARR_DELAY_NEW)), max = round(max(ARR_DELAY_NEW)), min= round(min(ARR_DELAY_NEW)))%>%
+  arrange(desc(mean))%>%
+  head(10)
+
+ggplot(data = airp, aes(x = reorder(Description,mean), y=mean,fill=Description))+geom_col()+xlab('Airpots') + 
+  ylab('Delay Length')+ labs(title="Airports and Delay Time", caption = "Data source: Bureau of Transportation")+ theme_economist() + scale_colour_economist()+ coord_flip()+ theme(legend.position = "none")+ theme(axis.title.x = element_text(vjust= -2),                                                                axis.title.y = element_text(vjust= 3),
+                                          plot.caption = element_text(vjust= -5,hjust=1,face="italic",size = 8) )
+```
+
+# Conclusions
+
+Overall, we found that northern states like North Dakota, South Dakota or New England states have longer delays which might be due to cold weather.  From the treemap we can see states like Texas, California,  NewYork, and Florida also have longer delays which might be due to popularity. 
+Analyzed by Airlines, we found out that Jetblue and Atalantic Southeast airlines have the longest mean delay, so try to avoid those large airlines. Local airlines tend to have less average delay time.  However, by analyzing the  pyramid chart we found that budget airlines usually have worse delays than others.
+
+Furthermore, try to avoid budget airlines like JetBlue for best experience. Analyzed by time, we found out an obvious pattern in quarter one and quarter two flights. In the first quarter, the cities in the north like Michigan overall had much worse delays. In the second quarter, the cities in the south like Miami overall had much worse delays.  Also Red Eye flights are commonly associated with long delays that are over 6 hours, so try to avoid Red Eye flights. What’s more, from Monday to Thursday, almost all of the worst delays are concentrated in New York and Chicago metropolitan areas. And when Friday and weekend days come, the worst delays start to spread to other popular getaway destinations. Thus, we recommend you to adjust your flight schedule according to this pattern as much as possible to avoid long delays.
+
+Analyzed by other interesting facts, we found that longer flight time usually corresponds to shorter average delay time. 
+
+Hopefully, this project will help you with your flight selection in the future! Have a safe and on-time trip!
+
