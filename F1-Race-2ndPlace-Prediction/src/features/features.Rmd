@@ -1,0 +1,105 @@
+---
+title: "Features"
+output: html_notebook
+---
+
+## Feature transforming
+```{r message = FALSE}
+# loading required packages
+library(dplyr)
+library(lubridate)
+library(tidyr)
+library(readr)
+```
+
+```{r message = FALSE}
+# setting working directory
+setwd("D:/QMSS_Spring_2020/AppliedDS")
+# read data
+df_all <- read.csv("data/df_all.csv")
+df_results <- read.csv("data/results.csv")
+```
+
+Initially I chose not to include `points` from `df_results` because I thought `points` is just another presentation of `position`, thus would make the regression analysis less generalization (and raise multi-collinearity issue). Nevertheless, later I realized the points earned for each position differs in different circuits. Additionally, the correlation ratio between `position` and `points` are lower than I assumed (I thought it would be over -0.8). As the consequence, I decided to include `points` in the following models. 
+
+```{r}
+# checking correlation between position and points, as well as mean points earned for each position
+cor(df_results$positionOrder, df_results$points)
+df_results %>% group_by(positionOrder) %>% summarise(mean(points))
+```
+
+I'm curious to see whether a driver from a club that has a long history of earning second places is more likely to earn more second places for that constructor. Below I checked the number of second places each constructor earned, then in the following code chunks, I created variable dummy `constructor_2nd_place` to identify the clubs that had earned second place more than 20 times (if true than the dummy equals 1, otherwise equals 0).
+
+Furthermore, I also wanted to investigate if a driver who had earned second placed is more likely to score another second place. The dummy variable `history_2nd_place` is set to be 1 if the driver had earned second place in the past. 
+```{r}
+# number of second place earned for each constructor
+df_all %>%  filter(position == 2) %>%
+  group_by(constructorId) %>% summarise(n = n()) %>% arrange(desc(n))
+```
+
+```{r}
+# dummy variable second_place_driver, if a driver had earned second place in the past then variable = 1
+second_place_driver <- df_all %>%  filter(position == 2, ) %>%
+  group_by(driverId) %>% summarise(n = n()) %>% arrange(desc(n))
+second_place_driver <- second_place_driver$driverId %>% as.vector()
+```
+
+```{r warning = FALSE}
+# creating dummy variables for second place and if the driver completed the race
+df_all$second_place <- recode(df_all$position, "2" = "1", .default = "0")
+df_all$race_complete <- recode(df_all$statusId, "1" = "1", .default = "0")
+
+# recoding the constructors who had earned 2nd place more than 20 times
+df_all$constructor_2nd_place <- recode(df_all$constructorId, "6" = "6", "1" = "1", "3" = "3",
+                                       "131" = "131", "9" = "9", "4" = "4", "25" = "25",
+                                       "22" = "22", "32" = "32", "66" = "66", "34" = "34", default = "0", .missing = "0") 
+df_all$constructor_2nd_place <- replace_na(df_all$constructor_2nd_place, "0")
+
+# if the driver had ever earned 2nd place, then the dummy variable equals to 1
+df_all$history_2nd_place <- ifelse(df_all$driverId %in% second_place_driver, 1, 0)
+
+# mutating birthday based on race date and driver dob
+df_all <- df_all %>% mutate(age = as.integer(round((as.Date(date) - as.Date(dob)) / 365.25, 0)))
+
+# converting variable to either integers
+df_all$position <- as.integer(df_all$position)
+df_all$fastestLap <- as.integer(df_all$fastestLap)
+df_all$rank <- as.integer(df_all$rank)
+df_all$fastestLapSpeed <- as.integer(df_all$fastestLapSpeed)
+df_all$fastestLapTimeSec <- period_to_seconds(ms(df_all$fastestLapTime))
+df_all$race_complete <- as.integer(df_all$race_complete)
+df_all$second_place <- as.integer(df_all$second_place)
+df_all$milliseconds <- as.integer(df_all$milliseconds)
+df_all$constructor_2nd_place <- as.integer(df_all$constructor_2nd_place)
+```
+
+```{r}
+# subsetting df_all to create a smaller df for regression
+subset <- df_all %>% filter(year <= 2010) %>% 
+                    select(second_place, constructor_2nd_place, grid, points, round, race_complete,
+                            age, history_2nd_place)
+# confirming the subset does not include any NAs
+colSums(is.na(subset))
+```
+
+```{r}
+# subsetting df_all to create training and testing set for ml practice
+subset2 <- df_all %>% select(year, constructor_2nd_place, grid, laps, points, 
+                            second_place, race_complete, age, history_2nd_place) %>% 
+                     rename(y = second_place)
+subset2$y <- factor(subset2$y, labels = c("yes", "no"), levels = 1:0)
+
+training <- subset2 %>% filter(year <= 2010) %>% select(-year)
+testing <- subset2 %>% filter(year > 2010 & year <= 2017) %>% select(-year)
+
+# confirming there's no NAs
+colSums(is.na(training))
+colSums(is.na(testing))
+```
+
+```{r}
+# exporting data
+write.csv(subset, 'data/subset.csv')
+write.csv(training, 'data/training.csv')
+write.csv(testing, 'data/testing.csv')
+```

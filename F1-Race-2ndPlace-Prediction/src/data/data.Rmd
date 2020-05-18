@@ -1,0 +1,53 @@
+---
+title: "Data wrangling"
+output: html_notebook
+---
+
+## Data importing and wrangling 
+```{r message = FALSE}
+# loading required packages
+library(dplyr)
+library(lubridate)
+library(tidyr)
+library(readr)
+```
+
+```{r}
+# setting working directory
+setwd("D:/QMSS_Spring_2020/AppliedDS")
+```
+
+For this project, I utilized `df_races`, `df_drivers` and `df_results` from Amazon S3 bucket (primarily df_results). I also tried using `df_lap_times` and `df_pit_stops`, both of those data frames contained extremely useful information that I thought could be useful to explain why a driver arrives in second place in a given race. Unfortunately, both of those datasets only contained data for more recent years and are missing all of the years prior to 1990s. Therefore, I decided to build the processed data based on those three data frames mentioned above. 
+
+```{r message = FALSE, warning = FALSE}
+# reading data imported from Amazon S3
+df_races <- read_csv("data/races.csv")
+df_drivers <- read_csv("data/drivers.csv")
+df_results <- read_csv("data/results.csv")
+#df_lap_times <- read_csv("data/lap_times.csv")
+#df_pit_stops <- read_csv("data/pit_stops.csv")
+```
+
+```{r}
+# removing unrelated variables and combining data frames
+df_all <- df_results %>% select(-resultId, -number, -positionText, 
+                                    -positionOrder, -time)
+
+df_all <- df_all %>% right_join(df_drivers, by = "driverId") %>% 
+                         select(-driverRef, -number, -code, -forename, -surname, 
+                                -nationality, -url)
+
+df_all <- df_all %>% right_join(df_races, by = "raceId") %>% 
+                     select(-year, -name, -time, -url)
+```
+
+```{r}
+# mutating new feature 'year'
+df_all$year <- as.numeric(year(df_all$date))
+
+```
+
+```{r}
+# write CSV
+write.csv(df_all, "data/df_all.csv")
+```

@@ -1,0 +1,173 @@
+---
+title: "Models"
+output: html_notebook
+---
+```{r message = FALSE}
+# loading required packages
+library(dplyr)
+library(lubridate)
+library(tidyr)
+library(readr)
+```
+
+```{r message = FALSE}
+# setting working directory
+setwd("D:/QMSS_Spring_2020/AppliedDS")
+```
+
+## Inferential model to explain why a driver arrives in second place in a race between 1950 and 2010. {.tabset .tabset-fade .tabset-pills}
+
+```{r}
+# reading data
+subset <- read.csv("data/subset.csv")
+```
+
+For the first part of this project, I used logit regression trying to explain why a driver arrives in second place in a race between 1950 and 2010. Model1 returned an adjusted R^2^ of 0.25, suggesting 25% of the variance in whether a driver arrives the second in a given race is explained by the model. This is not ideal, but with the current information I did not a better solution. Model2 uses the center scaled version of the dataset, thus offering standarized coefficients. The standardized coefficients are used to determine the importance of variables in the model1, a larger coefficient value would indicate a more important variable. 
+
+- `second_place`, the dependent variable (y), where 1 represents the driver finished second in the given race.
+- `points`, the number of points earned by the driver in that race. The model included a second degree polynomial term of `points`. As the coefficient at both first and second degree polynomial terms are negative, the curve of feature `points` is determined to be a concave (curve opens down), which means the points earned would over increase the chance of a driver earning second place, though the impact fades as the points earned increases. Both degree terms are statistically significant at 99.9% level. 
+- `race_complete`, a dummy variable based on `statusId` and is coded to 1 if the driver completed the race. The coefficient sugguests that having completed the race successful will increase the chance of earning second place by 9.43%. This feature is statistically significant at 99.9% level. 
+- `age`, age of the driver at the time of that race. This variable is not statistically significant in the model, indicates that driver's age at time of race does not affect the likelihood of a driver arrives the second in a race. 
+- `history_2nd_place`, dummy variable for whether the driver has a history of earning second places. This feature is statistically significant at 99% level, and if the driver had a history of earning second places, the chance of that driver winning another second place decreases by 0.9%. One possible interpretation would be earning second places would help a driver improve skill, so that driver can earn first places in the future. 
+- `constructor_2nd_place`, a list of constructors/clubs IDs that had earned second place for more than 20 times. In the actual model, this feature is factorized, meaning each of the constructorId is treated as an independent dummy variable. For instance, if a driver comes from Renault or Mercedes, the likelihood of the driver earning second place each decrease by 1.76% and 7.26%. However, if the driver comes from Ferrari's club, the chance of that driver earning second place increases by 1.24%. 
+- `grid`, a grid number for each driver at the race beginnig. Similar to the previous variable, `grid` is factorized in the model1. The starting position do help explaining whether a driver arrives second in a given race. The regression outcome indicates that if the driver is located in the first grid when starting, the chance of him earning second place decreases by 5.64% (maybe ends up winning the race). But if the driver is located in a grid slot from 2 to 4, the chance of him arrives the second in the race increases. 
+
+Overall, according to standardized coefficient in model2, the most important feature is the polynomial terms of `points`. The next most important feature is `history_2nd_place` (if the driver have already earned second place). 
+
+I also included a series of interaction terms, all of the interaction terms are statistically significnat at 99.9% level. Below I would provide marginal effect of the most important interaction:
+
+- `constructor_2nd_place` and `points`, given the save level of points earned, the impact of whether the constructor is a frequent second place earner.
+- `constructor_2nd_place` and `race_complete`, given the driver had completed the race, the impact of whether the constructor is a frequent second place earner.
+- `grid` and `points`, given the save level of points earned, the impact of a grid position closer to front.
+- `grid` and `race_complete`, given the driver had completed the race, the impact of a grid position closer to front.
+- `points` and `history_second_place`, if the driver had a history of earning second place, what's the impact of more points earned. This interaction term is tested to be the most important interaction term (according to standarized coefficient in model 2). If the driver had a history of eraning second place, 1 extra point earned would make that driver 4.65% more likely to earn another second place. 
+- `round` and `race_complete`, holding the round number in a circuit constant, what's the impact of completing the race in determining whether the driver earns the second place. 
+
+
+### a) Logistic regression without scaling
+```{r}
+# logit model without scaling 
+model1 <- lm(second_place ~  poly(points, 2) + race_complete + age + history_2nd_place + 
+               factor(constructor_2nd_place) + factor(grid) + constructor_2nd_place:points +
+               constructor_2nd_place:race_complete + grid:points + grid:race_complete + 
+               points:history_2nd_place + round:race_complete,
+             data = subset)
+summary(model1)
+```
+
+### b) Logistic regression with scaling, to provide standardized coefficients
+
+```{r}
+# model after scaling, offering standardized coefficients
+scaled_subset <- scale(subset, center = TRUE, scale = TRUE) %>% as.data.frame()
+model2 <- lm(second_place ~  poly(points, 2) + race_complete + age + history_2nd_place + 
+               constructor_2nd_place + grid + constructor_2nd_place:points +
+               constructor_2nd_place:race_complete + grid:points + grid:race_complete + 
+               points:history_2nd_place + round:race_complete, 
+               data = scaled_subset)
+summary(model2)
+```
+
+Lastly, I believe it's simply an association we observed instead of an "explanation" or causation. In order to fulfill a causal relation, three criterias need to be met: spatial continuity, temporal succession and constant conjunction. Among variables discussed previously, the regressors do not precedes the y variable (second place) in time. At the same time, we cannot ensure the independence or unit homogeneity among variables. Therefore, I suggest the relationship we explained is simply an association. 
+
+
+## Predictive models using 1950 to 2010 as training set, 2011 to 2017 as testing set to predict drivers that come in second place. {.tabset .tabset-fade .tabset-pills}
+
+For this part of the project, I splitted the dataset I created and assigned data from year 1950 to 2010 to training set, and 2011 to 2017 to testing set. Slightly different from the dataset I used for the inferential model, I included variable `laps`, which represents the number of laps a driver completed in a given race. 
+
+In the following predicitive models, I exlucded `constructor_2nd_place` variable as it would increase the overfitting in the testing set. Furthermore, I also changed the sets of interaction terms to include. 
+
+- `grid` and `points`; `constructor_2nd_place` and `points`; `grid` and `race_complete` are the three sets of interations I kept. I included three new sets of interactions.
+- `points` and `race_complete`
+- `points` and `laps`
+- `race_complete` and `laps`
+
+As the primary focus of supervised learning methods is not inference but prediction, I retained some features / interactions even though they don't make too much sense, as long as they help predicting better. 
+
+```{r}
+# loading data
+training <- read.csv("data/training.csv")
+testing <- read.csv("data/testing.csv")
+```
+
+```{r}
+# set random seed
+set.seed(20200510)
+```
+
+```{r}
+# Setting train control terms
+train_control <- trainControl(method = "repeatedcv", repeats = 3,
+                              classProbs = TRUE, summaryFunction = twoClassSummary)
+```
+
+### a) Generalized Linear Model
+```{r warning = FALSE, cache = TRUE}
+glm <- train(y ~  grid + poly(points, 2) + race_complete + 
+               age + history_2nd_place + grid:points  + 
+               points:race_complete + constructor_2nd_place:points + laps:points + 
+               laps:race_complete + grid:race_complete, 
+             data = training, method = "glm",
+             trControl = train_control, preProcess = c("center", "scale"))
+z_glm <- predict(glm, newdata = testing)
+confusionMatrix(z_glm, testing$y)
+```
+
+### b) Bagging (treebag)
+```{r warning = FALSE, cache = TRUE}
+treebag <- train(y ~ grid + poly(points, 2) + race_complete + 
+               age + history_2nd_place + grid:points  + 
+               points:race_complete + constructor_2nd_place:points + laps:points + 
+               laps:race_complete + grid:race_complete , 
+            data = training, method = "treebag",
+            trControl = train_control, preProcess = c("center", "scale"))
+
+z_treebag <- predict(treebag, newdata = testing)
+confusionMatrix(z_treebag, testing$y)
+```
+
+### c) Random Forest
+```{r warning = FALSE, cache = TRUE}
+rf1 <- train(y ~ grid + poly(points, 2) + race_complete + 
+               age + history_2nd_place + grid:points  + 
+               points:race_complete + constructor_2nd_place:points + laps:points + 
+               laps:race_complete + grid:race_complete, data = training,  method = "rf",
+            ntrees = 1000, trControl = train_control)
+z_rf1<- predict(rf1, newdata = testing)
+confusionMatrix(z_rf1, testing$y)
+```
+
+```{r warning = FALSE, cache = TRUE}
+rf2 <- train(y ~ grid + poly(points, 2) + race_complete + 
+               age + history_2nd_place + grid:points  + 
+               points:race_complete + constructor_2nd_place:points + laps:points + 
+               laps:race_complete + grid:race_complete, data = training,  method = "rf",
+            ntrees = 500, trControl = train_control)
+z_rf2 <- predict(rf2, newdata = testing)
+confusionMatrix(z_rf2, testing$y)
+```
+
+### Neural Network (MLP)
+```{r warning = FALSE, cache = TRUE}
+nnetGrid <- expand.grid(.decay = c(0, 0.01, .1),
+                        .size = c(1:10))
+nn <- train(y ~ grid + poly(points, 2) + race_complete + 
+               age + history_2nd_place + grid:points  + 
+               points:race_complete + constructor_2nd_place:points + laps:points + 
+               laps:race_complete + grid:race_complete, 
+            data = training, method = "nnet",
+            trControl = train_control, tuneGrid = nnetGrid,
+            preProcess = c("center", "scale"), trace = FALSE)
+z_nn <- predict(nn, newdata = testing)
+confusionMatrix(z_nn, testing$y)
+```
+
+## Predictive model evaluation
+Overall, the best predictive model from the algorithms/models above is the random forest model with 1000 trees. In that model, the accuracy score is 0.956, meaning 95.6% of the predicted y in the testing set matched the actual y. Breaking down the confusion matrix, the number of true positives and true negatives in this model are both the highest among all models I tried. The count of false positives is 131 and the count of false negative is just 1. 
+
+According to the `varImp` function (variable importance), the top 5 most important features in this model are: first and second degree polynomial term of `points`, interaction term between `race_complete` and `points`, `points` and `laps`, as well as variable age. 
+
+```{r}
+imp_rank <- varImp(rf1)
+imp_rank
+```

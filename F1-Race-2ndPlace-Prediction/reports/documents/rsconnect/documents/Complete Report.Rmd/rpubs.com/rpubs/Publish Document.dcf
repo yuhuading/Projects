@@ -1,0 +1,10 @@
+name: Publish Document
+title:
+username:
+account: rpubs
+server: rpubs.com
+hostUrl: rpubs.com
+appId: https://api.rpubs.com/api/v1/document/614168/3f7d630540774ec9b5222268f1682e91
+bundleId: https://api.rpubs.com/api/v1/document/614168/3f7d630540774ec9b5222268f1682e91
+url: http://rpubs.com/yuhuading/614168
+when: 1589398979.90107

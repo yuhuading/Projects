@@ -1,0 +1,22 @@
+---
+title: "Visualization"
+output: html_notebook
+---
+
+```{r}
+
+# setting working directory
+setwd("D:/QMSS_Spring_2020/AppliedDS")
+
+# read data
+imp_rank <- readRDS("data/imp_rank.rds")
+
+# create visualization
+library(ggplot2)
+library(ggthemes)
+p1 <- ggplot(data = imp_rank, aes(x = Overall)) + geom_bar(stat = "identity") +
+        theme_economist() + labs(title = "Variable Importance Ranking")
+
+p1
+ggsave("plot1.png")
+```
